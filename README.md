@@ -19,7 +19,7 @@ presentation.pptx
         ▼                      ▼
 [Path A] PPTX XML 파싱       [Path B] LightOnOCR API
   • 도형 위치·크기 (EMU)        • JPEG → 텍스트 추출
-  • 화살표 연결 관계             • 신뢰도 점수
+  • 화살표 연결 관계
   • 표·차트·SmartArt
   • 네임스페이스 자동 감지
         │                      │
@@ -54,8 +54,6 @@ presentation.pptx
 | Python | 3.10 이상 |
 | LibreOffice | 7.x 이상 (`soffice` 명령어) |
 | Poppler | `pdftoppm` 명령어 (`poppler-utils`) |
-| OCR API | LightOnOCR (사용자 제공) |
-| VLM API | Gemma4 OpenAI-compatible 서버 (사용자 제공) |
 
 ### 시스템 패키지 설치
 
@@ -85,15 +83,16 @@ pip install -r requirements.txt
 
 ### 1. API 엔드포인트 설정
 
-환경변수로 사용자 제공 API 주소를 지정합니다.
+환경변수로 API 주소와 인증 키를 지정합니다.
 
 ```bash
-export OCR_API_URL="http://ocr-server:8080/ocr"
-export OCR_API_KEY="your-ocr-key"          # 인증 불필요 시 생략
+export OCR_API_URL="http://<ocr-server>:<port>/v1/chat/completions"
+export OCR_API_KEY="your-ocr-key"   # 인증 불필요 시 생략
+export OCR_MODEL="lightonai/LightOnOCR-2-1B"
 
-export VLM_API_URL="http://vlm-server:8081/v1/chat/completions"
-export VLM_API_KEY="your-vlm-key"          # 인증 불필요 시 생략
-export VLM_MODEL="gemma4"                  # 모델명 (기본값: gemma4)
+export VLM_API_URL="http://<vlm-server>:<port>/v1/chat/completions"
+export VLM_API_KEY="your-vlm-key"   # 인증 불필요 시 생략
+export VLM_MODEL="gemma4"
 ```
 
 ### 2. 실행
@@ -115,7 +114,7 @@ python main.py presentation.pptx
 # 출력 경로와 이미지 품질 지정
 python main.py presentation.pptx --output ./results --dpi 200 --quality 90
 
-# VLM 없이 XML + OCR만 사용 (VLM 서버 없는 환경)
+# VLM 없이 XML + OCR만 사용
 python main.py presentation.pptx --no-vlm
 
 # OCR·VLM 모두 건너뛰고 XML 구조만 분석
@@ -123,8 +122,8 @@ python main.py presentation.pptx --no-ocr --no-vlm
 
 # API 주소를 CLI 플래그로 직접 지정
 python main.py presentation.pptx \
-  --ocr-url http://192.168.1.10:8080/ocr \
-  --vlm-url http://192.168.1.20:8081/v1/chat/completions \
+  --ocr-url http://192.168.1.10:8000/v1/chat/completions \
+  --vlm-url http://192.168.1.20:8001/v1/chat/completions \
   --vlm-model gemma4
 
 # 상세 로그 출력
@@ -147,9 +146,10 @@ options:
   --no-vlm              VLM 단계 건너뜀 (XML + OCR 결과로 대체)
   --ocr-url URL         OCR API URL 재정의
   --ocr-key KEY         OCR API 인증 키 재정의
+  --ocr-model NAME      OCR 모델명 재정의 (기본값: lightonai/LightOnOCR-2-1B)
   --vlm-url URL         VLM API URL 재정의
   --vlm-key KEY         VLM API 인증 키 재정의
-  --vlm-model NAME      VLM 모델명 재정의
+  --vlm-model NAME      VLM 모델명 재정의 (기본값: gemma4)
   --log-level LEVEL     로그 수준: DEBUG / INFO / WARNING / ERROR
 ```
 
@@ -159,7 +159,7 @@ options:
 
 | 환경변수 | 기본값 | 설명 |
 |----------|--------|------|
-| `OCR_API_URL` | `http://localhost:8000/v1/chat/completions` | LightOnOCR vllm 엔드포인트 |
+| `OCR_API_URL` | `http://localhost:8000/v1/chat/completions` | LightOnOCR 엔드포인트 |
 | `OCR_API_KEY` | (없음) | OCR API 인증 키 |
 | `OCR_MODEL` | `lightonai/LightOnOCR-2-1B` | LightOnOCR 모델명 |
 | `VLM_API_URL` | `http://localhost:8001/v1/chat/completions` | Gemma4 엔드포인트 |
@@ -194,86 +194,6 @@ output/
 
 ---
 
-## OCR API 연동 규격
-
-LightOnOCR는 **vllm으로 서빙**하며 OpenAI-compatible `/v1/chat/completions` 형식을 그대로 사용합니다.
-
-**vllm 서버 실행 예시**
-```bash
-vllm serve lightonai/LightOnOCR-2-1B \
-  --host 0.0.0.0 --port 8000 \
-  --max-model-len 8192
-```
-
-**요청 (POST `/v1/chat/completions`)**
-```json
-{
-  "model": "lightonai/LightOnOCR-2-1B",
-  "messages": [
-    {
-      "role": "user",
-      "content": [
-        {
-          "type": "image_url",
-          "image_url": { "url": "data:image/jpeg;base64,<base64>" }
-        }
-      ]
-    }
-  ],
-  "max_tokens": 4096,
-  "temperature": 0.2,
-  "top_p": 0.9
-}
-```
-
-**응답**
-```json
-{
-  "choices": [
-    { "message": { "content": "인식된 전체 텍스트..." } }
-  ]
-}
-```
-
-> `choices[0].message.content` 값이 그대로 OCR 결과 텍스트입니다.
-
----
-
-## VLM API 연동 규격
-
-OpenAI-compatible vision API 형식을 사용합니다.  
-Gemma4를 vLLM, Ollama(OpenAI 호환 모드), 또는 직접 구축한 서버로 서빙할 경우 모두 호환됩니다.
-
-**요청 (POST)**
-```json
-{
-  "model": "gemma4",
-  "messages": [
-    { "role": "system", "content": "..." },
-    {
-      "role": "user",
-      "content": [
-        { "type": "image_url", "image_url": { "url": "data:image/jpeg;base64,..." } },
-        { "type": "text",      "text": "XML 요약 및 OCR 텍스트 포함 프롬프트" }
-      ]
-    }
-  ],
-  "max_tokens": 4096,
-  "temperature": 0.1
-}
-```
-
-**응답 (기대 형식)**
-```json
-{
-  "choices": [
-    { "message": { "content": "# 슬라이드 제목\n\n..." } }
-  ]
-}
-```
-
----
-
 ## 프로젝트 구조
 
 ```
@@ -297,7 +217,7 @@ Gemma4를 vLLM, Ollama(OpenAI 호환 모드), 또는 직접 구축한 서버로 
 
 ## Markdown 폴백 우선순위
 
-VLM 서버가 없거나 오류 발생 시 자동으로 하위 방법으로 대체합니다.
+VLM 오류 발생 시 자동으로 하위 방법으로 대체합니다.
 
 ```
 VLM 결과  →  (실패 시) XML 구조 기반 생성  →  (실패 시) OCR 원문 텍스트
