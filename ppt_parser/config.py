@@ -19,12 +19,13 @@ class APIConfig:
 @dataclass
 class Config:
     # --- API endpoints (user-provided at runtime) ---
+    # Both OCR and VLM use OpenAI-compatible /v1/chat/completions endpoints.
     ocr_api: APIConfig = field(default_factory=lambda: APIConfig(
-        url=os.getenv("OCR_API_URL", "http://localhost:8080/ocr"),
+        url=os.getenv("OCR_API_URL", "http://localhost:8000/v1/chat/completions"),
         api_key=os.getenv("OCR_API_KEY", ""),
     ))
     vlm_api: APIConfig = field(default_factory=lambda: APIConfig(
-        url=os.getenv("VLM_API_URL", "http://localhost:8081/v1/chat/completions"),
+        url=os.getenv("VLM_API_URL", "http://localhost:8001/v1/chat/completions"),
         api_key=os.getenv("VLM_API_KEY", ""),
     ))
 
@@ -49,14 +50,16 @@ class Config:
     # Shapes within this edge-to-edge distance are "proximate"
     proximity_threshold_emu: float = 635000   # ~50 pt
 
-    # --- VLM ---
+    # --- OCR (LightOnOCR via vllm) ---
+    ocr_model: str = os.getenv("OCR_MODEL", "lightonai/LightOnOCR-2-1B")
+    ocr_max_tokens: int = 4096
+    ocr_temperature: float = 0.2
+    ocr_top_p: float = 0.9
+
+    # --- VLM (Gemma4) ---
     vlm_model: str = os.getenv("VLM_MODEL", "gemma4")
     vlm_max_tokens: int = 4096
     vlm_temperature: float = 0.1
-
-    # --- OCR response schema ---
-    # Set to "lighton" for LightOnOCR format, "generic" for plain text response
-    ocr_response_format: str = os.getenv("OCR_RESPONSE_FORMAT", "lighton")
 
     def ensure_dirs(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)

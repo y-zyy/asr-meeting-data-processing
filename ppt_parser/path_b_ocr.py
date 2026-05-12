@@ -1,4 +1,4 @@
-"""Path B: Send slide JPEG to OCR API and retrieve extracted text."""
+"""Path B: Send slide JPEG to LightOnOCR (vllm, OpenAI-compatible) and retrieve text."""
 from __future__ import annotations
 
 import json
@@ -15,53 +15,73 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# LightOnOCR response parser
+# Request builder
 # ---------------------------------------------------------------------------
 
-def _parse_lighton_response(data: Dict[str, Any], slide_num: int) -> OCRResult:
+def _build_ocr_payload(image_b64: str, cfg: Config) -> Dict[str, Any]:
     """
-    Parse LightOnOCR JSON response.
+    Build an OpenAI-compatible chat/completions request for LightOnOCR.
 
-    Expected schema (flexible – handles both flat and nested formats):
-      { "text": "...", "confidence": 0.95, "words": [{...}], ... }
-    or
-      { "outputs": [{"text": "...", "confidence": 0.95}] }
+    LightOnOCR is served via vllm and accepts the standard vision message format:
+      POST /v1/chat/completions
+      {
+        "model": "lightonai/LightOnOCR-2-1B",
+        "messages": [{ "role": "user", "content": [{ "type": "image_url", ... }] }],
+        ...
+      }
+    The model returns the OCR'd text directly as the assistant message content.
+    No system prompt or additional instructions are needed.
     """
-    # Try outputs array first (batch format)
-    if "outputs" in data and isinstance(data["outputs"], list) and data["outputs"]:
-        item = data["outputs"][0]
-    else:
-        item = data
+    return {
+        "model": cfg.ocr_model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{image_b64}",
+                        },
+                    }
+                ],
+            }
+        ],
+        "max_tokens": cfg.ocr_max_tokens,
+        "temperature": cfg.ocr_temperature,
+        "top_p": cfg.ocr_top_p,
+    }
 
-    text = item.get("text") or item.get("recognized_text") or item.get("result") or ""
-    confidence = float(item.get("confidence", item.get("score", 1.0)))
-    words: List[Dict[str, Any]] = item.get("words", item.get("word_boxes", []))
 
+# ---------------------------------------------------------------------------
+# Response parser
+# ---------------------------------------------------------------------------
+
+def _parse_response(raw: Dict[str, Any], slide_num: int) -> OCRResult:
+    """
+    Extract OCR text from an OpenAI-compatible response.
+
+    Response shape:
+      { "choices": [{ "message": { "content": "<ocr text>" } }] }
+    """
+    choices = raw.get("choices", [])
+    if not choices:
+        logger.warning("Slide %d: OCR response has no choices field", slide_num)
+        return OCRResult(slide_num=slide_num, text="", confidence=0.0, raw_response=raw)
+
+    content = choices[0].get("message", {}).get("content", "")
+    if isinstance(content, list):
+        # Multi-part content — join text blocks
+        content = "\n".join(
+            part.get("text", "") for part in content if isinstance(part, dict)
+        )
+
+    # LightOnOCR does not return per-token logprobs by default; treat as full confidence.
     return OCRResult(
         slide_num=slide_num,
-        text=str(text),
-        confidence=confidence,
-        word_boxes=words,
-        raw_response=data,
-    )
-
-
-def _parse_generic_response(data: Dict[str, Any], slide_num: int) -> OCRResult:
-    """Fallback parser for plain-text OCR responses."""
-    if isinstance(data, str):
-        return OCRResult(slide_num=slide_num, text=data, confidence=1.0)
-    text = (
-        data.get("text")
-        or data.get("result")
-        or data.get("recognized_text")
-        or json.dumps(data)
-    )
-    confidence = float(data.get("confidence", data.get("score", 1.0)))
-    return OCRResult(
-        slide_num=slide_num,
-        text=str(text),
-        confidence=confidence,
-        raw_response=data,
+        text=content.strip(),
+        confidence=1.0,
+        raw_response=raw,
     )
 
 
@@ -71,7 +91,7 @@ def _parse_generic_response(data: Dict[str, Any], slide_num: int) -> OCRResult:
 
 def _post_json(url: str, payload: Dict[str, Any], api_cfg: APIConfig) -> Dict[str, Any]:
     body = json.dumps(payload).encode("utf-8")
-    headers = {
+    headers: Dict[str, str] = {
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
@@ -90,57 +110,32 @@ def _post_json(url: str, payload: Dict[str, Any], api_cfg: APIConfig) -> Dict[st
 
 def run_ocr(image_path: Path, slide_num: int, cfg: Config) -> OCRResult:
     """
-    Call OCR API for the given slide image.
+    Call LightOnOCR for one slide image.
 
-    Caches results in cfg.cache_dir to avoid redundant API calls.
+    Results are cached in cfg.cache_dir (keyed by image content hash)
+    so repeated runs on the same file skip the API call.
     """
-    img_b64 = encode_image_base64(image_path)
-    cache_key = f"ocr_{content_sha256(img_b64)[:16]}_slide{slide_num}"
+    image_b64 = encode_image_base64(image_path)
+    cache_key = f"ocr_{content_sha256(image_b64)[:16]}_slide{slide_num}"
 
     cached = load_cache(cfg.cache_dir, cache_key)
     if cached:
         logger.debug("OCR cache hit for slide %d", slide_num)
-        parser = (
-            _parse_lighton_response
-            if cfg.ocr_response_format == "lighton"
-            else _parse_generic_response
-        )
-        return parser(cached, slide_num)
+        return _parse_response(cached, slide_num)
 
     logger.info("Running OCR for slide %d …", slide_num)
-    payload = _build_ocr_payload(img_b64, image_path)
+    payload = _build_ocr_payload(image_b64, cfg)
 
     def _call() -> Dict[str, Any]:
         return _post_json(cfg.ocr_api.url, payload, cfg.ocr_api)
 
     raw = retry_with_backoff(_call, max_retries=cfg.ocr_api.max_retries)
     save_cache(cfg.cache_dir, cache_key, raw)
-
-    if cfg.ocr_response_format == "lighton":
-        return _parse_lighton_response(raw, slide_num)
-    return _parse_generic_response(raw, slide_num)
+    return _parse_response(raw, slide_num)
 
 
-def _build_ocr_payload(img_b64: str, image_path: Path) -> Dict[str, Any]:
-    """
-    Build the request payload for LightOnOCR.
-
-    LightOnOCR typically accepts:
-      POST /ocr
-      { "image": "<base64>", "lang": "auto" }
-    Adjust here if the user's endpoint differs.
-    """
-    return {
-        "image": img_b64,
-        "lang": "auto",
-        "filename": image_path.name,
-    }
-
-
-def run_ocr_batch(
-    image_paths: List[Path], cfg: Config
-) -> List[Optional[OCRResult]]:
-    """Run OCR for a list of slide images (sequentially, with caching)."""
+def run_ocr_batch(image_paths: List[Path], cfg: Config) -> List[Optional[OCRResult]]:
+    """Run OCR for every slide image sequentially (with per-slide caching)."""
     results: List[Optional[OCRResult]] = []
     for idx, img_path in enumerate(image_paths, start=1):
         try:

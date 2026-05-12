@@ -159,10 +159,10 @@ options:
 
 | 환경변수 | 기본값 | 설명 |
 |----------|--------|------|
-| `OCR_API_URL` | `http://localhost:8080/ocr` | LightOnOCR 엔드포인트 |
+| `OCR_API_URL` | `http://localhost:8000/v1/chat/completions` | LightOnOCR vllm 엔드포인트 |
 | `OCR_API_KEY` | (없음) | OCR API 인증 키 |
-| `OCR_RESPONSE_FORMAT` | `lighton` | 응답 파싱 형식 (`lighton` / `generic`) |
-| `VLM_API_URL` | `http://localhost:8081/v1/chat/completions` | Gemma4 엔드포인트 |
+| `OCR_MODEL` | `lightonai/LightOnOCR-2-1B` | LightOnOCR 모델명 |
+| `VLM_API_URL` | `http://localhost:8001/v1/chat/completions` | Gemma4 엔드포인트 |
 | `VLM_API_KEY` | (없음) | VLM API 인증 키 |
 | `VLM_MODEL` | `gemma4` | VLM 모델명 |
 
@@ -196,29 +196,46 @@ output/
 
 ## OCR API 연동 규격
 
-LightOnOCR 서버에 대해 아래 형식으로 요청합니다.
+LightOnOCR는 **vllm으로 서빙**하며 OpenAI-compatible `/v1/chat/completions` 형식을 그대로 사용합니다.
 
-**요청 (POST)**
+**vllm 서버 실행 예시**
+```bash
+vllm serve lightonai/LightOnOCR-2-1B \
+  --host 0.0.0.0 --port 8000 \
+  --max-model-len 8192
+```
+
+**요청 (POST `/v1/chat/completions`)**
 ```json
 {
-  "image": "<base64 인코딩된 JPEG>",
-  "lang": "auto",
-  "filename": "slide-1.jpg"
+  "model": "lightonai/LightOnOCR-2-1B",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "image_url",
+          "image_url": { "url": "data:image/jpeg;base64,<base64>" }
+        }
+      ]
+    }
+  ],
+  "max_tokens": 4096,
+  "temperature": 0.2,
+  "top_p": 0.9
 }
 ```
 
-**응답 (기대 형식)**
+**응답**
 ```json
 {
-  "text": "인식된 전체 텍스트",
-  "confidence": 0.95,
-  "words": [
-    { "text": "단어", "x": 100, "y": 50, "w": 80, "h": 30, "conf": 0.98 }
+  "choices": [
+    { "message": { "content": "인식된 전체 텍스트..." } }
   ]
 }
 ```
 
-`OCR_RESPONSE_FORMAT=generic` 설정 시 `text` 필드만 있는 단순 응답도 허용합니다.
+> `choices[0].message.content` 값이 그대로 OCR 결과 텍스트입니다.
 
 ---
 
