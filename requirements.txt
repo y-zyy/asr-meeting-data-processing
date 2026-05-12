@@ -1,0 +1,13 @@
+# PPT to Markdown parser dependencies
+# All packages are installable in a closed network (pip download + offline install)
+
+# No third-party packages are strictly required — the pipeline uses:
+#   - stdlib: zipfile, xml.etree.ElementTree, urllib.request, subprocess, hashlib, json
+#   - System tools: LibreOffice (soffice), pdftoppm (poppler-utils)
+#
+# Optional accelerators:
+# lxml>=4.9              # faster XML parsing (drop-in, auto-detected)
+# Pillow>=10.0           # image inspection / thumbnail generation
+
+lxml>=4.9.0
+Pillow>=10.0.0
