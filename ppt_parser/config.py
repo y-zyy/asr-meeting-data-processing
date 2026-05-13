@@ -61,6 +61,7 @@ class Config:
     vlm_max_tokens: int = 4096
     vlm_temperature: float = 0.1
 
+
     def ensure_dirs(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.slides_dir.mkdir(parents=True, exist_ok=True)

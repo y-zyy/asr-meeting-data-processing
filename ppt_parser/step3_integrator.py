@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .models import OCRResult, ShapeType, SlideResult, SlideXMLStructure, VLMResult
+from .models import OCRResult, OpenDataLoaderResult, ShapeType, SlideResult, SlideXMLStructure, VLMResult
 from .step1_geometry import slide_to_xml_summary
 
 logger = logging.getLogger(__name__)
@@ -113,12 +113,21 @@ def _flatten_chain(start_id: str, arrow_map: Dict[str, List[str]]) -> List[str]:
 # ---------------------------------------------------------------------------
 
 def select_markdown(result: SlideResult) -> str:
-    """Choose the best available Markdown for a slide."""
+    """Choose the best available Markdown for a slide.
+
+    Priority: VLM > XML fallback > OpenDataLoader plain text > OCR plain text > empty.
+    VLM already incorporates OpenDataLoader + OCR + image, so it is preferred when
+    available.  When VLM is unavailable the OpenDataLoader text (more accurate than OCR)
+    is preferred over raw OCR output.
+    """
     if result.vlm_result and result.vlm_result.markdown.strip():
         return result.vlm_result.markdown.strip()
     if result.xml_structure:
         logger.debug("Slide %d: VLM unavailable, using XML fallback", result.slide_num)
         return _xml_structure_to_fallback_md(result.xml_structure)
+    if result.opendataloader_result and result.opendataloader_result.text.strip():
+        logger.debug("Slide %d: Using OpenDataLoader text", result.slide_num)
+        return result.opendataloader_result.text.strip()
     if result.ocr_result and result.ocr_result.text.strip():
         logger.debug("Slide %d: Using raw OCR text", result.slide_num)
         return result.ocr_result.text.strip()
@@ -176,6 +185,11 @@ def _slide_result_to_dict(result: SlideResult) -> Dict[str, Any]:
             "relationships": [_rel_to_dict(r) for r in xs.relationships],
             "notes": xs.notes,
             "xml_summary": slide_to_xml_summary(xs),
+        }
+    if result.opendataloader_result:
+        d["opendataloader"] = {
+            "text": result.opendataloader_result.text,
+            "confidence": result.opendataloader_result.confidence,
         }
     if result.ocr_result:
         d["ocr"] = {
