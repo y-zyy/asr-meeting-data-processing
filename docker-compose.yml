@@ -1,0 +1,36 @@
+version: "3.9"
+
+services:
+  web:
+    build: .
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+    environment:
+      # ── API endpoints ──────────────────────────────────────────────────────
+      # OCR (LightOnOCR via vllm) — replace with your actual endpoint
+      OCR_API_URL: "${OCR_API_URL:-http://ocr-server:8000/v1/chat/completions}"
+      OCR_API_KEY: "${OCR_API_KEY:-}"
+      OCR_MODEL:   "${OCR_MODEL:-lightonai/LightOnOCR-2-1B}"
+
+      # VLM (Gemma4 via vllm/tgi) — replace with your actual endpoint
+      VLM_API_URL: "${VLM_API_URL:-http://vlm-server:8001/v1/chat/completions}"
+      VLM_API_KEY: "${VLM_API_KEY:-}"
+      VLM_MODEL:   "${VLM_MODEL:-gemma4}"
+
+      # ── Storage ────────────────────────────────────────────────────────────
+      JOBS_DIR: /data/jobs
+
+    volumes:
+      - ppt_jobs:/data/jobs
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  ppt_jobs:

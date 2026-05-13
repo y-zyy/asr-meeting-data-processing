@@ -72,6 +72,7 @@ def build_vlm_messages(
     xml_summary: str,
     ocr_text: str,
     opendataloader_text: str = "",
+    system_prompt: str = "",
 ) -> list:
     """Build OpenAI-compatible chat messages with a vision payload."""
     user_text = _USER_PROMPT_TEMPLATE.format(
@@ -81,7 +82,7 @@ def build_vlm_messages(
         ocr_text=ocr_text or "(no OCR text available)",
     )
     return [
-        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt or _SYSTEM_PROMPT},
         {
             "role": "user",
             "content": [
@@ -186,7 +187,9 @@ def run_vlm(
 
     logger.info("Running VLM for slide %d …", slide_num)
     messages = build_vlm_messages(
-        slide_num, image_b64, xml_summary, ocr_text, opendataloader_text=odl_text
+        slide_num, image_b64, xml_summary, ocr_text,
+        opendataloader_text=odl_text,
+        system_prompt=cfg.vlm_system_prompt,
     )
     payload = {
         "model": cfg.vlm_model,

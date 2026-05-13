@@ -60,7 +60,8 @@ class Config:
     vlm_model: str = os.getenv("VLM_MODEL", "gemma4")
     vlm_max_tokens: int = 4096
     vlm_temperature: float = 0.1
-
+    # Custom system prompt; empty string means use the built-in default
+    vlm_system_prompt: str = ""
 
     def ensure_dirs(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)

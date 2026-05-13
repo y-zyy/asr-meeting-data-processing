@@ -17,3 +17,8 @@ pypdf>=4.0.0
 
 # OpenDataLoader — layout-aware PDF text extraction (Path C, PDF input only)
 opendataloader_pdf
+
+# Web service
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
