@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-PPT → Markdown pipeline CLI.
+PPT/PDF → Markdown pipeline CLI.
 
 Usage examples:
   python main.py presentation.pptx
+  python main.py document.pdf
   python main.py presentation.pptx --output ./results --dpi 200
   python main.py presentation.pptx --no-vlm          # XML + OCR only
   python main.py presentation.pptx --no-ocr --no-vlm  # XML only (offline test)
@@ -50,13 +51,18 @@ def build_config(args: argparse.Namespace) -> Config:
     return cfg
 
 
+_PPTX_EXTS = {".pptx", ".ppt"}
+_PDF_EXTS = {".pdf"}
+_SUPPORTED_EXTS = _PPTX_EXTS | _PDF_EXTS
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Convert a PPTX file to Markdown using XML analysis, OCR, and VLM.",
+        description="Convert a PPTX or PDF file to Markdown using XML/text analysis, OCR, and VLM.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("pptx", help="Path to the input .pptx file")
+    parser.add_argument("input", help="Path to the input .pptx or .pdf file")
     parser.add_argument("-o", "--output", default="output", help="Output directory (default: ./output)")
     parser.add_argument("--dpi", type=int, default=150, help="JPEG render DPI (default: 150)")
     parser.add_argument("--quality", type=int, default=85, help="JPEG quality (default: 85)")
@@ -74,29 +80,44 @@ def main() -> int:
     setup_logging(args.log_level)
     logger = logging.getLogger(__name__)
 
-    pptx_path = Path(args.pptx)
-    if not pptx_path.exists():
-        logger.error("File not found: %s", pptx_path)
+    input_path = Path(args.input)
+    if not input_path.exists():
+        logger.error("File not found: %s", input_path)
         return 1
-    if pptx_path.suffix.lower() not in (".pptx", ".ppt"):
-        logger.warning("File does not have a .pptx extension: %s", pptx_path)
+
+    ext = input_path.suffix.lower()
+    if ext not in _SUPPORTED_EXTS:
+        logger.warning("Unrecognised file extension '%s'. Supported: %s", ext, ", ".join(sorted(_SUPPORTED_EXTS)))
+
+    is_pdf = ext in _PDF_EXTS
 
     cfg = build_config(args)
     cfg.ensure_dirs()
 
-    logger.info("=== PPT → Markdown pipeline ===")
-    logger.info("Input:  %s", pptx_path.resolve())
+    logger.info("=== PPT/PDF → Markdown pipeline ===")
+    logger.info("Input:  %s", input_path.resolve())
     logger.info("Output: %s", cfg.output_dir.resolve())
+    logger.info("Mode:   %s", "PDF" if is_pdf else "PPTX")
 
-    # --- Step 0: Convert ---
+    # --- Step 0: Convert to JPEG slides ---
     from ppt_parser import step0_converter
-    images = step0_converter.convert_pptx(pptx_path, cfg)
-    logger.info("Converted %d slides", len(images))
+    if is_pdf:
+        images = step0_converter.convert_pdf(input_path, cfg)
+    else:
+        images = step0_converter.convert_pptx(input_path, cfg)
+    logger.info("Converted %d page(s)/slide(s)", len(images))
 
-    # --- Path A: XML ---
-    from ppt_parser import path_a_xml_parser, step1_geometry
-    xml_structures = path_a_xml_parser.parse_all_slides(pptx_path)
-    xml_map = {s.slide_num: step1_geometry.analyze_geometry(s, cfg) for s in xml_structures}
+    # --- Path A: Structural text extraction ---
+    from ppt_parser import step1_geometry
+    xml_map: dict = {}
+    if is_pdf:
+        from ppt_parser import pdf_text_parser
+        page_structures = pdf_text_parser.parse_all_pages(input_path)
+        xml_map = {s.slide_num: step1_geometry.analyze_geometry(s, cfg) for s in page_structures}
+    else:
+        from ppt_parser import path_a_xml_parser
+        xml_structures = path_a_xml_parser.parse_all_slides(input_path)
+        xml_map = {s.slide_num: step1_geometry.analyze_geometry(s, cfg) for s in xml_structures}
 
     # --- Path B: OCR ---
     from ppt_parser import path_b_ocr
@@ -121,7 +142,7 @@ def main() -> int:
             try:
                 vlm_result = step2_vlm.run_vlm(img_path, idx, xml_s, ocr, cfg)
             except Exception as exc:
-                logger.error("VLM failed for slide %d: %s", idx, exc)
+                logger.error("VLM failed for slide/page %d: %s", idx, exc)
 
         results.append(
             SlideResult(
@@ -135,7 +156,7 @@ def main() -> int:
 
     # --- Step 3: Integrate & save ---
     from ppt_parser import step3_integrator
-    step3_integrator.integrate_results(results, cfg.output_dir, pptx_path.name)
+    step3_integrator.integrate_results(results, cfg.output_dir, input_path.name)
 
     logger.info("=== Done ===")
     logger.info("Markdown: %s/output.md", cfg.output_dir)
