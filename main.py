@@ -9,12 +9,12 @@ Usage examples:
   python main.py presentation.pptx --no-ocr --no-vlm  # XML only (offline test)
 
 Environment variables for API endpoints:
-  OCR_API_URL      default: http://localhost:8080/ocr
-  OCR_API_KEY      default: (empty)
-  VLM_API_URL      default: http://localhost:8081/v1/chat/completions
-  VLM_API_KEY      default: (empty)
-  VLM_MODEL        default: gemma4
-  OCR_RESPONSE_FORMAT  "lighton" or "generic"  default: lighton
+  OCR_API_URL    default: http://localhost:8000/v1/chat/completions
+  OCR_API_KEY    default: (empty)
+  OCR_MODEL      default: lightonai/LightOnOCR-2-1B
+  VLM_API_URL    default: http://localhost:8001/v1/chat/completions
+  VLM_API_KEY    default: (empty)
+  VLM_MODEL      default: gemma4
 """
 from __future__ import annotations
 
@@ -37,6 +37,8 @@ def build_config(args: argparse.Namespace) -> Config:
         cfg.ocr_api.url = args.ocr_url
     if args.ocr_key:
         cfg.ocr_api.api_key = args.ocr_key
+    if args.ocr_model:
+        cfg.ocr_model = args.ocr_model
 
     if args.vlm_url:
         cfg.vlm_api.url = args.vlm_url
@@ -62,9 +64,10 @@ def main() -> int:
     parser.add_argument("--no-vlm", action="store_true", help="Skip VLM step (use XML+OCR fallback)")
     parser.add_argument("--ocr-url", default=None, help="Override OCR API URL")
     parser.add_argument("--ocr-key", default=None, help="Override OCR API key")
+    parser.add_argument("--ocr-model", default=None, help="Override OCR model name (default: lightonai/LightOnOCR-2-1B)")
     parser.add_argument("--vlm-url", default=None, help="Override VLM API URL")
     parser.add_argument("--vlm-key", default=None, help="Override VLM API key")
-    parser.add_argument("--vlm-model", default=None, help="Override VLM model name")
+    parser.add_argument("--vlm-model", default=None, help="Override VLM model name (default: gemma4)")
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args()
 
