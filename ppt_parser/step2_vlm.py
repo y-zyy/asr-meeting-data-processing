@@ -20,49 +20,72 @@ logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = """\
 You are an expert presentation analyst. Your task is to convert a slide into \
-well-formatted Markdown. You will receive:
-1. The slide image
-2. OpenDataLoader-extracted text — direct PDF text extraction, highest accuracy
-3. OCR-extracted text — image-based recognition, supplementary reference only
+well-formatted Markdown by synthesising three complementary sources.
+
+You will receive:
+1. The slide image — visual ground truth for all content
+2. OpenDataLoader-extracted text — direct PDF text extraction, typically highest accuracy
+3. OCR-extracted text — image-based recognition, complementary reference
 4. An XML summary of the slide's structural elements, positions, and relationships
 
-**Text source priority (highest → lowest):**
-1. OpenDataLoader text: Use this as the primary and most accurate text source.
-   Prefer its wording, spelling, and content over all other sources.
-2. OCR text: Use only to fill gaps not covered by OpenDataLoader, or to help
-   infer spatial/visual layout that OpenDataLoader may miss.
-3. Slide image: Use for visual structure, diagrams, charts, and any content
-   not captured by text extraction.
+**Cross-source synthesis:**
+- Compare OpenDataLoader and OCR text. Where they agree, use that wording.
+- Where they disagree, consult the slide image to determine the correct reading.
+- Use OCR spatial hints to infer reading order or layout when OpenDataLoader lacks positioning.
+- When the image reveals content missed by both text sources, include it.
+- The three sources are complementary: each may capture what the others miss.
 
-Output ONLY the Markdown content for this single slide. Do not include \
-surrounding commentary.
+**Text source priority (for wording and spelling):**
+1. OpenDataLoader text: primary source when it covers the content
+2. OCR text: fill gaps; resolve disagreements by referencing the slide image
+3. Slide image: final arbiter for all ambiguities; sole source for purely visual content
 
-Rules:
+**Arrow and relationship extraction:**
+- Examine the XML <arrows> section for connector relationships between shapes.
+- Also visually inspect the slide image for arrows, lines, and directional indicators
+  not captured in XML (e.g., drawn arrows inside diagrams, SmartArt flows, annotated images).
+- Represent each directional relationship as: [source text] → [target text]
+- For multi-step flows: [A] → [B] → [C]
+- For branching flows, use a nested list with arrows
+- If an arrow carries a label or the context implies a relationship name, include it:
+  [A] --label--> [B]
+
+**Non-text visual elements (images, diagrams, charts):**
+- For every image, chart, or diagram that cannot be represented as plain text,
+  write a concise description covering: type of visual, what it depicts, and key insight.
+  Format: **[Figure: <type>]** <description>
+- Identify any slide text that refers to, captions, or annotates the visual element.
+  If a mapping exists, output it immediately after the figure description:
+  *Text–Figure mapping:* "<text on slide>" → refers to the figure above
+
+**Output format rules:**
+- Output ONLY the Markdown for this single slide — no surrounding commentary
 - Use # for the slide title, ## for section headings
 - Render tables as GitHub-flavoured Markdown tables
-- Represent flowcharts/diagrams using ASCII art or descriptive flow notation: [Box] → [Box]
-- For hierarchical structures use nested lists
-- For arrow relationships shown in the XML <arrows> section, represent as: shape_text → shape_text
-- Preserve all text content accurately — prioritise OpenDataLoader wording
+- Use nested lists for hierarchical structures
 - Do not invent content not present in the slide
 """
 
 _USER_PROMPT_TEMPLATE = """\
 ## Slide {slide_num}
 
-### XML Structure:
+### XML Structure (shapes, positions, arrow connectors):
 ```xml
 {xml_summary}
 ```
 
-### OpenDataLoader Extracted Text (Primary — most accurate):
+### OpenDataLoader Extracted Text (Primary — most accurate wording):
 {opendataloader_text}
 
-### OCR Extracted Text (Supplementary — use to fill gaps only):
+### OCR Extracted Text (Supplementary — use to cross-check and fill gaps):
 {ocr_text}
 
-Please generate the Markdown representation for this slide.
-Prioritise the OpenDataLoader text for all textual content.
+Please generate the Markdown representation for this slide following the system instructions.
+
+Key tasks:
+1. Cross-validate OpenDataLoader and OCR text; use the slide image to resolve any conflicts.
+2. Extract all arrow/flow relationships from the XML <arrows> section AND from visual inspection of the image.
+3. For every non-text visual element (image, chart, diagram), write a **[Figure: <type>]** description and note any text–figure mapping found on the slide.
 """
 
 
