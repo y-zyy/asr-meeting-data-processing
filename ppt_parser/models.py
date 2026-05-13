@@ -160,6 +160,14 @@ class OCRResult:
 
 
 @dataclass
+class OpenDataLoaderResult:
+    slide_num: int
+    text: str
+    confidence: float = 1.0
+    raw_response: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class VLMResult:
     slide_num: int
     markdown: str
@@ -173,6 +181,7 @@ class SlideResult:
     image_path: str = ""
     xml_structure: Optional[SlideXMLStructure] = None
     ocr_result: Optional[OCRResult] = None
+    opendataloader_result: Optional[OpenDataLoaderResult] = None
     vlm_result: Optional[VLMResult] = None
     final_markdown: str = ""
     error: Optional[str] = None
