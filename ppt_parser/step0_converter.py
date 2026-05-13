@@ -1,4 +1,8 @@
-"""Step 0: PPT → PDF (LibreOffice) → JPEG images (pdftoppm)."""
+"""Step 0: PPT/PDF → JPEG images.
+
+PPTX path: PPTX → PDF (LibreOffice) → JPEG (pdftoppm)
+PDF path:  PDF → JPEG (pdftoppm, skips LibreOffice)
+"""
 from __future__ import annotations
 
 import logging
@@ -89,5 +93,12 @@ def convert_pptx(pptx_path: Path, cfg: Config) -> List[Path]:
     """Full pipeline: PPTX → PDF → JPEG list."""
     cfg.ensure_dirs()
     pdf_path = pptx_to_pdf(pptx_path, cfg.output_dir)
+    images = pdf_to_jpegs(pdf_path, cfg.slides_dir, dpi=cfg.jpeg_dpi, quality=cfg.jpeg_quality)
+    return images
+
+
+def convert_pdf(pdf_path: Path, cfg: Config) -> List[Path]:
+    """Full pipeline for PDF input: PDF → JPEG list (no LibreOffice needed)."""
+    cfg.ensure_dirs()
     images = pdf_to_jpegs(pdf_path, cfg.slides_dir, dpi=cfg.jpeg_dpi, quality=cfg.jpeg_quality)
     return images

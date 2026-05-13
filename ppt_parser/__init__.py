@@ -1,55 +1,48 @@
-"""PPT → Markdown parser using XML analysis, OCR, and VLM."""
+"""PPT/PDF → Markdown parser using XML/text analysis, OCR, and VLM."""
 from .config import Config
 from .models import SlideResult
 
-__all__ = ["Config", "SlideResult", "parse_pptx"]
+__all__ = ["Config", "SlideResult", "parse_pptx", "parse_pdf"]
 
 
-def parse_pptx(pptx_path, cfg: Config | None = None) -> list[SlideResult]:
-    """
-    Full pipeline: PPTX → Markdown.
-
-    Returns a list of SlideResult objects.
-    Call step3_integrator.integrate_results() to write output files.
-    """
+def _run_pipeline(input_path, cfg: Config, *, is_pdf: bool) -> list[SlideResult]:
+    """Shared pipeline for both PPTX and PDF inputs."""
     from pathlib import Path
     from .config import default_config
-    from . import (
-        step0_converter,
-        path_a_xml_parser,
-        path_b_ocr,
-        step1_geometry,
-        step2_vlm,
-    )
+    from . import step0_converter, path_b_ocr, step1_geometry, step2_vlm
 
-    pptx_path = Path(pptx_path)
+    input_path = Path(input_path)
     cfg = cfg or default_config
     cfg.ensure_dirs()
 
-    # Step 0: PPT → JPEG
-    images = step0_converter.convert_pptx(pptx_path, cfg)
+    # Step 0: → JPEG images
+    if is_pdf:
+        images = step0_converter.convert_pdf(input_path, cfg)
+    else:
+        images = step0_converter.convert_pptx(input_path, cfg)
 
-    # Path A: XML parsing
-    xml_structures = path_a_xml_parser.parse_all_slides(pptx_path)
-    xml_map = {s.slide_num: s for s in xml_structures}
+    # Path A: structural text extraction
+    if is_pdf:
+        from . import pdf_text_parser
+        raw_structures = pdf_text_parser.parse_all_pages(input_path)
+    else:
+        from . import path_a_xml_parser
+        raw_structures = path_a_xml_parser.parse_all_slides(input_path)
+    xml_map = {s.slide_num: step1_geometry.analyze_geometry(s, cfg) for s in raw_structures}
 
-    # Path B: OCR (concurrent if desired; here sequential for simplicity)
+    # Path B: OCR
     ocr_results = path_b_ocr.run_ocr_batch(images, cfg)
 
     results: list[SlideResult] = []
     for idx, img_path in enumerate(images, start=1):
-        xml_raw = xml_map.get(idx)
+        xml_enriched = xml_map.get(idx)
         ocr = ocr_results[idx - 1]
 
-        # Step 1: Geometric analysis
-        xml_enriched = step1_geometry.analyze_geometry(xml_raw, cfg) if xml_raw else None
-
-        # Step 2: VLM
         try:
             vlm = step2_vlm.run_vlm(img_path, idx, xml_enriched, ocr, cfg)
         except Exception as exc:
             import logging
-            logging.getLogger(__name__).error("VLM failed for slide %d: %s", idx, exc)
+            logging.getLogger(__name__).error("VLM failed for page/slide %d: %s", idx, exc)
             vlm = None
 
         results.append(
@@ -63,3 +56,13 @@ def parse_pptx(pptx_path, cfg: Config | None = None) -> list[SlideResult]:
         )
 
     return results
+
+
+def parse_pptx(pptx_path, cfg: Config | None = None) -> list[SlideResult]:
+    """Full pipeline: PPTX → list of SlideResult."""
+    return _run_pipeline(pptx_path, cfg, is_pdf=False)
+
+
+def parse_pdf(pdf_path, cfg: Config | None = None) -> list[SlideResult]:
+    """Full pipeline: PDF → list of SlideResult."""
+    return _run_pipeline(pdf_path, cfg, is_pdf=True)

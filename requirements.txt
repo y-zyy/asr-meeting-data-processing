@@ -1,4 +1,4 @@
-# PPT to Markdown parser dependencies
+# PPT/PDF to Markdown parser dependencies
 # All packages are installable in a closed network (pip download + offline install)
 
 # No third-party packages are strictly required — the pipeline uses:
@@ -11,3 +11,6 @@
 
 lxml>=4.9.0
 Pillow>=10.0.0
+
+# PDF text extraction (used when input is a .pdf file)
+pypdf>=4.0.0
