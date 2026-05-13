@@ -14,3 +14,6 @@ Pillow>=10.0.0
 
 # PDF text extraction (used when input is a .pdf file)
 pypdf>=4.0.0
+
+# OpenDataLoader — layout-aware PDF text extraction (Path C, PDF input only)
+opendataloader_pdf

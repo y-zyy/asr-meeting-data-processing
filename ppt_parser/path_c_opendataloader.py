@@ -1,160 +1,194 @@
-"""Path C: Extract text from PDF pages via OpenDataLoader API.
+"""Path C: Extract text from PDF pages using the opendataloader_pdf package.
 
-OpenDataLoader performs direct PDF text extraction (e.g. embedded font-based parsing,
-layout-aware extraction), which is more accurate than image-based OCR for text-embedded
-PDFs.  Results are used as the primary text source in the VLM prompt, taking precedence
-over OCR output.
+opendataloader_pdf provides layout-aware, font-based PDF text extraction which
+is more accurate than image-based OCR for text-embedded PDFs.  The extracted
+text is used as the primary (highest-priority) text source in the VLM prompt.
 
-API contract (HTTP POST to OPENDATALOADER_API_URL):
-  Request JSON:
-    {
-      "pdf_base64": "<base64-encoded PDF bytes>",
-      "page_num": 1,          # 1-indexed
-      "model": "opendataloader"
-    }
-  Response JSON:
-    {
-      "text": "<extracted text for the page>",
-      "page_num": 1
-    }
-  OR OpenAI-compatible:
-    {
-      "choices": [{ "message": { "content": "<extracted text>" } }]
-    }
+Usage of the underlying library:
+    from opendataloader_pdf import PDFConverter
+    converter = PDFConverter()
+    result = converter.convert(pdf_path, format='json')   # structured per-page
+    result = converter.convert(pdf_path, format='md')     # whole-doc markdown
 """
 from __future__ import annotations
 
-import base64
 import json
 import logging
-import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
-from .config import APIConfig, Config
 from .models import OpenDataLoaderResult
-from .utils import content_sha256, load_cache, retry_with_backoff, save_cache
+from .utils import content_sha256, load_cache, save_cache
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Request builder
+# Library import helper
 # ---------------------------------------------------------------------------
 
-def _read_pdf_base64(pdf_path: Path) -> str:
-    """Read a PDF file and return its base64-encoded content."""
-    with open(pdf_path, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
-
-
-def _build_payload(pdf_base64: str, page_num: int, cfg: Config) -> Dict[str, Any]:
-    return {
-        "model": cfg.opendataloader_model,
-        "pdf_base64": pdf_base64,
-        "page_num": page_num,
-        "max_tokens": cfg.opendataloader_max_tokens,
-    }
+def _try_import() -> Optional[object]:
+    try:
+        from opendataloader_pdf import PDFConverter  # type: ignore
+        return PDFConverter
+    except ImportError:
+        return None
 
 
 # ---------------------------------------------------------------------------
-# Response parser
+# Per-page text extraction
 # ---------------------------------------------------------------------------
 
-def _parse_response(raw: Dict[str, Any], page_num: int) -> OpenDataLoaderResult:
-    """Extract text from the OpenDataLoader API response.
+def _extract_pages_from_json(raw_json) -> Dict[int, str]:
+    """Parse the JSON output of PDFConverter into a {page_num: text} dict.
 
-    Supports both a custom {text: ...} format and the OpenAI-compatible
-    choices[0].message.content format.
+    Tries common JSON structures that layout-aware converters produce.
+    Falls back to treating the whole content as page 1 if unrecognised.
     """
-    # Custom format
-    if "text" in raw:
-        text = raw["text"] or ""
-        return OpenDataLoaderResult(
-            slide_num=page_num,
-            text=str(text).strip(),
-            confidence=1.0,
-            raw_response=raw,
+    if isinstance(raw_json, str):
+        try:
+            raw_json = json.loads(raw_json)
+        except json.JSONDecodeError:
+            return {1: raw_json.strip()}
+
+    # Structure: list of page objects
+    if isinstance(raw_json, list):
+        pages: Dict[int, str] = {}
+        for item in raw_json:
+            if isinstance(item, dict):
+                num = item.get("page") or item.get("page_num") or item.get("page_number")
+                text = item.get("text") or item.get("content") or item.get("markdown") or ""
+                if num is not None:
+                    pages[int(num)] = str(text).strip()
+        if pages:
+            return pages
+
+    # Structure: dict with "pages" key
+    if isinstance(raw_json, dict):
+        page_list = raw_json.get("pages") or raw_json.get("content")
+        if isinstance(page_list, list):
+            pages = {}
+            for item in page_list:
+                if isinstance(item, dict):
+                    num = item.get("page") or item.get("page_num") or item.get("page_number")
+                    text = item.get("text") or item.get("content") or item.get("markdown") or ""
+                    if num is not None:
+                        pages[int(num)] = str(text).strip()
+            if pages:
+                return pages
+        # Single-page or flat dict
+        text = raw_json.get("text") or raw_json.get("content") or raw_json.get("markdown") or ""
+        if text:
+            return {1: str(text).strip()}
+
+    return {}
+
+
+def _split_markdown_by_page(md_text: str) -> Dict[int, str]:
+    """Heuristically split a full-document markdown string into pages.
+
+    Many converters embed page markers like '<!-- page N -->' or '---'.
+    Falls back to returning the whole text as page 1.
+    """
+    import re
+
+    # Try explicit page markers: <!-- page N --> or <<<Page N>>>
+    marker_re = re.compile(
+        r"<!--\s*[Pp]age\s*(\d+)\s*-->|<<<\s*[Pp]age\s*(\d+)\s*>>>", re.IGNORECASE
+    )
+    parts = marker_re.split(md_text)
+    if len(parts) > 1:
+        pages: Dict[int, str] = {}
+        i = 0
+        page_num = None
+        while i < len(parts):
+            chunk = parts[i]
+            # marker_re produces 3 groups per match (full, group1, group2)
+            if i % 3 == 0 and i > 0:
+                text = parts[i].strip() if i < len(parts) else ""
+                if page_num and text:
+                    pages[page_num] = text
+            elif i % 3 == 1 and parts[i] is not None:
+                page_num = int(parts[i])
+            elif i % 3 == 2 and parts[i] is not None:
+                page_num = int(parts[i])
+            i += 1
+        if pages:
+            return pages
+
+    # No markers found — return whole document as page 1
+    return {1: md_text.strip()}
+
+
+def _convert_pdf(pdf_path: Path) -> Dict[int, str]:
+    """Call PDFConverter and return a {page_num: text} mapping."""
+    PDFConverter = _try_import()
+    if PDFConverter is None:
+        logger.warning(
+            "opendataloader_pdf not installed — OpenDataLoader step skipped. "
+            "Install with: pip install opendataloader_pdf"
         )
+        return {}
 
-    # OpenAI-compatible format
-    choices = raw.get("choices", [])
-    if choices:
-        content = choices[0].get("message", {}).get("content", "")
-        if isinstance(content, list):
-            content = "\n".join(
-                part.get("text", "") for part in content if isinstance(part, dict)
-            )
-        return OpenDataLoaderResult(
-            slide_num=page_num,
-            text=str(content).strip(),
-            confidence=1.0,
-            raw_response=raw,
-        )
+    converter = PDFConverter()
 
-    logger.warning("Page %d: OpenDataLoader response has no recognised text field", page_num)
-    return OpenDataLoaderResult(slide_num=page_num, text="", confidence=0.0, raw_response=raw)
+    # Prefer JSON output (structured, per-page) over markdown
+    try:
+        raw = converter.convert(str(pdf_path), format="json")
+        pages = _extract_pages_from_json(raw)
+        if pages:
+            logger.debug("OpenDataLoader: got %d pages via JSON format", len(pages))
+            return pages
+    except Exception as exc:
+        logger.debug("OpenDataLoader JSON format failed (%s), trying md", exc)
 
-
-# ---------------------------------------------------------------------------
-# HTTP helper
-# ---------------------------------------------------------------------------
-
-def _post_json(url: str, payload: Dict[str, Any], api_cfg: APIConfig) -> Dict[str, Any]:
-    body = json.dumps(payload).encode("utf-8")
-    headers: Dict[str, str] = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-    if api_cfg.api_key:
-        headers["Authorization"] = f"Bearer {api_cfg.api_key}"
-    headers.update(api_cfg.extra_headers)
-
-    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=api_cfg.timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    # Fall back to markdown output
+    try:
+        md = converter.convert(str(pdf_path), format="md")
+        pages = _split_markdown_by_page(md if isinstance(md, str) else str(md))
+        logger.debug("OpenDataLoader: got %d pages via markdown format", len(pages))
+        return pages
+    except Exception as exc:
+        logger.warning("OpenDataLoader conversion failed for %s: %s", pdf_path, exc)
+        return {}
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-def run_opendataloader(pdf_path: Path, page_num: int, cfg: Config) -> OpenDataLoaderResult:
-    """Call the OpenDataLoader API for one PDF page.
-
-    Results are cached in cfg.cache_dir keyed by (pdf content hash, page number)
-    so repeated runs on the same file skip the API call.
-    """
-    pdf_b64 = _read_pdf_base64(pdf_path)
-    cache_key = f"odl_{content_sha256(pdf_b64)[:16]}_page{page_num}"
-
-    cached = load_cache(cfg.cache_dir, cache_key)
-    if cached:
-        logger.debug("OpenDataLoader cache hit for page %d", page_num)
-        return _parse_response(cached, page_num)
-
-    logger.info("Running OpenDataLoader for page %d …", page_num)
-    payload = _build_payload(pdf_b64, page_num, cfg)
-
-    def _call() -> Dict[str, Any]:
-        return _post_json(cfg.opendataloader_api.url, payload, cfg.opendataloader_api)
-
-    raw = retry_with_backoff(_call, max_retries=cfg.opendataloader_api.max_retries)
-    save_cache(cfg.cache_dir, cache_key, raw)
-    return _parse_response(raw, page_num)
-
-
 def run_opendataloader_batch(
     pdf_path: Path,
     num_pages: int,
-    cfg: Config,
+    cfg,  # Config — avoid circular import at type-check time
 ) -> List[Optional[OpenDataLoaderResult]]:
-    """Run OpenDataLoader for every page in the PDF sequentially."""
+    """Extract text from every page of a PDF using opendataloader_pdf.
+
+    Results are cached in cfg.cache_dir keyed by PDF content hash so that
+    repeated runs on the same file skip re-conversion.
+    """
+    # Cache the full-document conversion result
+    pdf_bytes = pdf_path.read_bytes()
+    cache_key = f"odl_{content_sha256(pdf_bytes.hex()[:400])[:16]}_allpages"
+
+    cached = load_cache(cfg.cache_dir, cache_key)
+    if cached:
+        logger.debug("OpenDataLoader cache hit for %s", pdf_path.name)
+        pages: Dict[int, str] = {int(k): v for k, v in cached.items()}
+    else:
+        logger.info("Running OpenDataLoader on %s …", pdf_path.name)
+        pages = _convert_pdf(pdf_path)
+        if pages:
+            save_cache(cfg.cache_dir, cache_key, {str(k): v for k, v in pages.items()})
+
     results: List[Optional[OpenDataLoaderResult]] = []
     for page_num in range(1, num_pages + 1):
-        try:
-            results.append(run_opendataloader(pdf_path, page_num, cfg))
-        except Exception as exc:
-            logger.error("OpenDataLoader failed for page %d: %s", page_num, exc)
+        text = pages.get(page_num, "")
+        if text:
+            results.append(
+                OpenDataLoaderResult(slide_num=page_num, text=text, confidence=1.0)
+            )
+        else:
             results.append(None)
+
     return results

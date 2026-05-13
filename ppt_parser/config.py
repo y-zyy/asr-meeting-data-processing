@@ -28,10 +28,6 @@ class Config:
         url=os.getenv("VLM_API_URL", "http://localhost:8001/v1/chat/completions"),
         api_key=os.getenv("VLM_API_KEY", ""),
     ))
-    opendataloader_api: APIConfig = field(default_factory=lambda: APIConfig(
-        url=os.getenv("OPENDATALOADER_API_URL", "http://localhost:8002/extract"),
-        api_key=os.getenv("OPENDATALOADER_API_KEY", ""),
-    ))
 
     # --- Image conversion ---
     jpeg_dpi: int = 150          # pdftoppm resolution
@@ -65,9 +61,6 @@ class Config:
     vlm_max_tokens: int = 4096
     vlm_temperature: float = 0.1
 
-    # --- OpenDataLoader ---
-    opendataloader_model: str = os.getenv("OPENDATALOADER_MODEL", "opendataloader")
-    opendataloader_max_tokens: int = 4096
 
     def ensure_dirs(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)

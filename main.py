@@ -17,9 +17,7 @@ Environment variables for API endpoints:
   VLM_API_URL                default: http://localhost:8001/v1/chat/completions
   VLM_API_KEY                default: (empty)
   VLM_MODEL                  default: gemma4
-  OPENDATALOADER_API_URL     default: http://localhost:8002/extract
-  OPENDATALOADER_API_KEY     default: (empty)
-  OPENDATALOADER_MODEL       default: opendataloader
+  (OpenDataLoader uses the opendataloader_pdf Python package — no API endpoint needed)
 """
 from __future__ import annotations
 
@@ -52,13 +50,6 @@ def build_config(args: argparse.Namespace) -> Config:
     if args.vlm_model:
         cfg.vlm_model = args.vlm_model
 
-    if args.opendataloader_url:
-        cfg.opendataloader_api.url = args.opendataloader_url
-    if args.opendataloader_key:
-        cfg.opendataloader_api.api_key = args.opendataloader_key
-    if args.opendataloader_model:
-        cfg.opendataloader_model = args.opendataloader_model
-
     return cfg
 
 
@@ -87,12 +78,6 @@ def main() -> int:
     parser.add_argument("--vlm-url", default=None, help="Override VLM API URL")
     parser.add_argument("--vlm-key", default=None, help="Override VLM API key")
     parser.add_argument("--vlm-model", default=None, help="Override VLM model name (default: gemma4)")
-    parser.add_argument("--opendataloader-url", default=None,
-                        help="Override OpenDataLoader API URL")
-    parser.add_argument("--opendataloader-key", default=None,
-                        help="Override OpenDataLoader API key")
-    parser.add_argument("--opendataloader-model", default=None,
-                        help="Override OpenDataLoader model name (default: opendataloader)")
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args()
 
